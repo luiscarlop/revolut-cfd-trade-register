@@ -2,12 +2,6 @@ import { useState, useMemo, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import AuthPage from "./Auth";
 
-const defaultAssets = [
-  { id: 1, ticker: "XAUUSD", name: "Gold", lotSize: 100, feePerLot: 0.35, leverage: 20 },
-  { id: 2, ticker: "EURUSD", name: "Euro/USD", lotSize: 100000, feePerLot: 3.0, leverage: 30 },
-  { id: 3, ticker: "US100", name: "Nasdaq 100", lotSize: 1, feePerLot: 0.5, leverage: 10 },
-  { id: 4, ticker: "AAPL", name: "Apple Inc.", lotSize: 1, feePerLot: 0.1, leverage: 5 },
-];
 
 const TABS = ["Trades", "Assets DB", "Charts", "Summary"];
 
@@ -105,7 +99,7 @@ function EquityCurve({ trades, assets }) {
 
 export default function App() {
   const [tab, setTab] = useState("Trades");
-  const [assets, setAssets] = useState(defaultAssets);
+  const [assets, setAssets] = useState([]);
   const [trades, setTrades] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState("");
@@ -117,20 +111,21 @@ export default function App() {
   const emptyTrade = { ticker: "", direction: "Long", date: new Date().toISOString().slice(0, 10), entryPrice: "", exitPrice: "", lots: "", notes: "" };
   const [form, setForm] = useState(emptyTrade);
 
-  // ── Load from localStorage on mount ──────────────────────────────────────
+  // ── Auth session ──────────────────────────────────────────────────────────
   const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        setSession(session);
-      })
-      return () => subscription.unsubscribe();
-    })
+      setAuthReady(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setAuthReady(true);
+    });
+    return () => subscription.unsubscribe();
   }, []);
-
-  if (!session) return <AuthPage />;
 
   useEffect(() => {
     async function loadData() {
@@ -139,7 +134,9 @@ export default function App() {
       const { data: assetsData, error: assetsError } = await supabase.from("assets").select("*").eq("user_id", userId);
 
       if (tradesData) setTrades(tradesData.map(dbTradeToApp))
-      if (assetsData && assetsData.length > 0) setAssets(assetsData.map(dbAssetToApp))
+
+      if (assetsData) setAssets(assetsData.map(dbAssetToApp));
+
       setLoaded(true)
     }
     loadData()
@@ -201,9 +198,9 @@ export default function App() {
         ticker: form.ticker,
         direction: form.direction,
         date: form.date,
-        entry_price: form.entryPrice,
-        exit_price: form.exitPrice || null,
-        lots: form.lots,
+        entry_price: parseFloat(form.entryPrice),
+        exit_price: form.exitPrice !== "" ? parseFloat(form.exitPrice) : null,
+        lots: parseFloat(form.lots),
         notes: form.notes
       }).eq("id", editId).select().single();
       if (!updateError) setTrades((t) => t.map((tr) => tr.id === editId ? dbTradeToApp(updatedData) : tr));
@@ -214,9 +211,9 @@ export default function App() {
         ticker: form.ticker,
         direction: form.direction,
         date: form.date,
-        entry_price: form.entryPrice,
-        exit_price: form.exitPrice || null,
-        lots: form.lots,
+        entry_price: parseFloat(form.entryPrice),
+        exit_price: form.exitPrice !== "" ? parseFloat(form.exitPrice) : null,
+        lots: parseFloat(form.lots),
         notes: form.notes
       }).select().single();
       if (!error) setTrades((t) => [dbTradeToApp(data), ...t]);
@@ -320,6 +317,14 @@ export default function App() {
     sectionTitle: { fontSize: "0.7rem", color: "#475569", textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: "0.75rem", fontWeight: 700 },
   };
 
+  if (!authReady) return (
+    <div style={{ minHeight: "100vh", background: "#0a0f1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: "0.85rem", letterSpacing: "0.1em" }}>
+      LOADING…
+    </div>
+  );
+
+  if (!session) return <AuthPage />;
+
   if (!loaded) return (
     <div style={{ minHeight: "100vh", background: "#0a0f1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: "0.85rem", letterSpacing: "0.1em" }}>
       LOADING…
@@ -385,15 +390,15 @@ export default function App() {
                 </div>
                 <div>
                   <label style={s.label}>Lots</label>
-                  <input style={s.input} type="number" step="0.01" placeholder="e.g. 0.5" value={form.lots} onChange={(e) => setForm({ ...form, lots: +e.target.value })} />
+                  <input style={s.input} type="number" step="0.01" placeholder="e.g. 0.5" value={form.lots} onChange={(e) => setForm({ ...form, lots: e.target.value })} />
                 </div>
                 <div>
                   <label style={s.label}>Entry Price</label>
-                  <input style={s.input} type="number" step="any" placeholder="e.g. 2350.5" value={form.entryPrice} onChange={(e) => setForm({ ...form, entryPrice: +e.target.value })} />
+                  <input style={s.input} type="number" step="any" placeholder="e.g. 2350.5" value={form.entryPrice} onChange={(e) => setForm({ ...form, entryPrice: e.target.value })} />
                 </div>
                 <div>
                   <label style={s.label}>Exit Price <span style={{ color: "#475569" }}>(opt.)</span></label>
-                  <input style={s.input} type="number" step="any" placeholder="Leave blank if open" value={form.exitPrice} onChange={(e) => setForm({ ...form, exitPrice: e.target.value ? +e.target.value : "" })} />
+                  <input style={s.input} type="number" step="any" placeholder="Leave blank if open" value={form.exitPrice} onChange={(e) => setForm({ ...form, exitPrice: e.target.value })} />
                 </div>
                 <div style={{ gridColumn: "1 / -1" }}>
                   <label style={s.label}>Notes</label>
