@@ -1,3 +1,6 @@
+# Private docs
+.docs/
+
 # Logs
 logs
 *.log

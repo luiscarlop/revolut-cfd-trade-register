@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
+import { supabase } from "./supabaseClient";
+import AuthPage from "./Auth";
 
 const defaultAssets = [
   { id: 1, ticker: "XAUUSD", name: "Gold", lotSize: 100, feePerLot: 0.35, leverage: 20 },
@@ -116,28 +118,59 @@ export default function App() {
   const [form, setForm] = useState(emptyTrade);
 
   // ── Load from localStorage on mount ──────────────────────────────────────
+  const [session, setSession] = useState(null);
+
   useEffect(() => {
-    try {
-      const t = localStorage.getItem("cfd-trades");
-      if (t) setTrades(JSON.parse(t));
-    } catch (_) {}
-    try {
-      const a = localStorage.getItem("cfd-assets");
-      if (a) setAssets(JSON.parse(a));
-    } catch (_) {}
-    setLoaded(true);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+      })
+      return () => subscription.unsubscribe();
+    })
   }, []);
 
-  // ── Persist on every change ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!loaded) return;
-    localStorage.setItem("cfd-trades", JSON.stringify(trades));
-  }, [trades, loaded]);
+  if (!session) return <AuthPage />;
 
   useEffect(() => {
-    if (!loaded) return;
-    localStorage.setItem("cfd-assets", JSON.stringify(assets));
-  }, [assets, loaded]);
+    async function loadData() {
+      const userId = session.user.id;
+      const { data: tradesData, error: tradesError } = await supabase.from("trades").select("*").eq("user_id", userId).order("date", { ascending: false });
+      const { data: assetsData, error: assetsError } = await supabase.from("assets").select("*").eq("user_id", userId);
+
+      if (tradesData) setTrades(tradesData.map(dbTradeToApp))
+      if (assetsData && assetsData.length > 0) setAssets(assetsData.map(dbAssetToApp))
+      setLoaded(true)
+    }
+    loadData()
+  }, [session])
+
+  // DB row -> app object
+  function dbTradeToApp(row) {
+    return {
+      id: row.id,
+      ticker: row.ticker,
+      direction: row.direction,
+      date: row.date,
+      entryPrice: row.entry_price,
+      exitPrice: row.exit_price,
+      lots: row.lots,
+      notes: row.notes
+    }
+  }
+
+  function dbAssetToApp(row) {
+    return {
+      id: row.id,
+      ticker: row.ticker,
+      name: row.name,
+      lotSize: row.lot_size,
+      feePerLot: row.fee_per_lot,
+      leverage: row.leverage
+    }
+  }
+
+  // ── Persist helpers ───────────────────────────────────────────────────────
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const filtered = useMemo(
@@ -161,19 +194,41 @@ export default function App() {
     return { closed: closed.length, wins, losses, winRate: closed.length ? (wins / closed.length) * 100 : 0, totalPL, avgWin, avgLoss, cumulative };
   }, [trades, assets]);
 
-  const saveTrade = () => {
+  const saveTrade = async () => {
     if (!form.ticker || !form.entryPrice || !form.lots) return;
     if (editId !== null) {
-      setTrades((t) => t.map((tr) => (tr.id === editId ? { ...form, id: editId } : tr)));
+      const { data: updatedData, error: updateError } = await supabase.from("trades").update({
+        ticker: form.ticker,
+        direction: form.direction,
+        date: form.date,
+        entry_price: form.entryPrice,
+        exit_price: form.exitPrice || null,
+        lots: form.lots,
+        notes: form.notes
+      }).eq("id", editId).select().single();
+      if (!updateError) setTrades((t) => t.map((tr) => tr.id === editId ? dbTradeToApp(updatedData) : tr));
       setEditId(null);
     } else {
-      setTrades((t) => [...t, { ...form, id: Date.now() }]);
+      const { data, error } = await supabase.from("trades").insert({
+        user_id: session.user.id,
+        ticker: form.ticker,
+        direction: form.direction,
+        date: form.date,
+        entry_price: form.entryPrice,
+        exit_price: form.exitPrice || null,
+        lots: form.lots,
+        notes: form.notes
+      }).select().single();
+      if (!error) setTrades((t) => [dbTradeToApp(data), ...t]);
     }
     setForm(emptyTrade);
     setShowForm(false);
   };
 
-  const deleteTrade = (id) => setTrades((t) => t.filter((tr) => tr.id !== id));
+  const deleteTrade = async (id) => {
+    const { error } = await supabase.from("trades").delete().eq("id", id);
+    if (!error) setTrades((t) => t.filter((tr) => tr.id !== id));
+  };
   const startEdit = (tr) => { setForm({ ...tr }); setEditId(tr.id); setShowForm(true); };
 
   const exportCSV = () => {
@@ -190,15 +245,35 @@ export default function App() {
     a.click();
   };
 
-  const saveAsset = () => {
+  const saveAsset = async () => {
     if (!newAsset.ticker || !newAsset.lotSize || !newAsset.feePerLot) return;
     if (editAssetId !== null) {
-      setAssets((a) => a.map((x) => (x.id === editAssetId ? { ...newAsset, id: editAssetId, lotSize: +newAsset.lotSize, feePerLot: +newAsset.feePerLot, leverage: +newAsset.leverage || 1 } : x)));
+      const { data: updatedAssetData, error: updatedAssetError } = await supabase.from("assets").update({
+        ticker: newAsset.ticker,
+        name: newAsset.name,
+        lot_size: newAsset.lotSize,
+        fee_per_lot: newAsset.feePerLot,
+        leverage: newAsset.leverage
+      }).eq("id", editAssetId).select().single();
+      if (!updatedAssetError) setAssets((a) => a.map((x) => x.id === editAssetId ? dbAssetToApp(updatedAssetData) : x));
       setEditAssetId(null);
     } else {
-      setAssets((a) => [...a, { ...newAsset, id: Date.now(), lotSize: +newAsset.lotSize, feePerLot: +newAsset.feePerLot, leverage: +newAsset.leverage || 1 }]);
+      const { data: assetData, error: assetError } = await supabase.from("assets").insert({
+        user_id: session.user.id,
+        ticker: newAsset.ticker,
+        name: newAsset.name,
+        lot_size: newAsset.lotSize,
+        fee_per_lot: newAsset.feePerLot,
+        leverage: newAsset.leverage
+      }).select().single();
+      if (!assetError) setAssets((a) => [...a, dbAssetToApp(assetData)]);
     }
     setNewAsset({ ticker: "", name: "", lotSize: "", feePerLot: "", leverage: "" });
+  };
+
+  const deleteAsset = async (id) => {
+    const { error } = await supabase.from("assets").delete().eq("id", id);
+    if (!error) setAssets((a) => a.filter((x) => x.id !== id));
   };
 
   const previewPL = useMemo(() => {
@@ -265,6 +340,7 @@ export default function App() {
               <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>{t}</button>
             ))}
           </div>
+          <button style={s.btn("ghost")} onClick={() => supabase.auth.signOut()}>Log out</button>
         </div>
       </div>
 
@@ -413,7 +489,7 @@ export default function App() {
                     <td style={s.td}>
                       <div style={{ display: "flex", gap: "0.3rem" }}>
                         <button style={s.btn("sm")} onClick={() => { setEditAssetId(a.id); setNewAsset({ ticker: a.ticker, name: a.name, lotSize: a.lotSize, feePerLot: a.feePerLot, leverage: a.leverage || "" }); }}>✎</button>
-                        <button style={s.btn("danger")} onClick={() => setAssets((x) => x.filter((b) => b.id !== a.id))}>✕</button>
+                        <button style={s.btn("danger")} onClick={() => deleteAsset(a.id)}>✕</button>
                       </div>
                     </td>
                   </tr>
