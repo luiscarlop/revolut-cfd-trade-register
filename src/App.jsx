@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import AuthPage from "./Auth";
+import LandingPage from "./LandingPage";
 
 
 const TABS = ["Trades", "Assets DB", "Charts", "Summary"];
@@ -114,6 +115,7 @@ export default function App() {
   // ── Auth session ──────────────────────────────────────────────────────────
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -323,7 +325,10 @@ export default function App() {
     </div>
   );
 
-  if (!session) return <AuthPage />;
+  if (!session) {
+    if (!showAuth) return <LandingPage onGetStarted={() => setShowAuth(true)} />;
+    return <AuthPage />;
+  }
 
   if (!loaded) return (
     <div style={{ minHeight: "100vh", background: "#0a0f1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#475569", fontFamily: "'DM Mono', monospace", fontSize: "0.85rem", letterSpacing: "0.1em" }}>
